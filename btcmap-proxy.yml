@@ -1,0 +1,8 @@
+server:
+  port: 3000
+  jwks_url: "http://localhost:4456/.well-known/jwks.json"
+app:
+  btcmap_api_url: "https://api.btcmap.org/rpc"
+  btcmap_origin: "blink"
+tracing:
+  service_name: "btcmap-proxy"

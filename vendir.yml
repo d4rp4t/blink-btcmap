@@ -1,0 +1,16 @@
+apiVersion: vendir.k14s.io/v1alpha1
+kind: Config
+
+directories:
+  - path: vendor
+    contents:
+      - path: blink-quickstart
+        git:
+          url: https://github.com/blinkbitcoin/blink.git
+          ref: "main"
+        includePaths:
+          - quickstart/.env.galoy
+          - quickstart/docker-compose.yml
+          - quickstart/dev/**/*
+          - quickstart/bin/*
+        newRootPath: quickstart
