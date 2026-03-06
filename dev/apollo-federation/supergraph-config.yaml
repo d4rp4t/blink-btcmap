@@ -1,0 +1,10 @@
+federation_version: =2.3.2
+subgraphs:
+  blink:
+    routing_url: http://localhost:4012/graphql
+    schema:
+      file: ../../vendor/blink-quickstart/dev/config/apollo-federation/supergraph.graphql
+  btcmap:
+    routing_url: http://localhost:3000/graphql
+    schema:
+      file: ../../subgraph/schema.graphql

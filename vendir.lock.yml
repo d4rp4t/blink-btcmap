@@ -1,0 +1,12 @@
+apiVersion: vendir.k14s.io/v1alpha1
+directories:
+- contents:
+  - git:
+      commitTitle: 'chore(deps): update @ip1sms/disposable-phone-numbers to v2.1.1464
+        (#486)...'
+      sha: 61dd7bc0a7397ce9b2f742815f5011fd0deba8b5
+      tags:
+      - 0.21.143-2-g61dd7bc0a
+    path: blink-quickstart
+  path: vendor
+kind: LockConfig

@@ -1,0 +1,33 @@
+[workspace]
+members = [".", "lib/tracing-rs"]
+
+[package]
+name = "btcmap-proxy"
+version = "0.1.0"
+edition = "2021"
+default-run = "btcmap-proxy"
+
+[lib]
+name = "lib_btcmap_proxy"
+
+[[bin]]
+name = "write_sdl"
+path = "src/bin/write_sdl.rs"
+
+[dependencies]
+anyhow = "1"
+async-graphql = { version = "=7.0.6", features = ["chrono", "playground"] }
+async-graphql-axum = "=7.0.3"
+axum = { version = "0.7", features = ["macros"] }
+axum-extra = { version = "0.9", default-features = false, features = ["typed-header"] }
+clap = { version = "4", features = ["derive", "env"] }
+chrono = "0.4"
+jsonwebtoken = "9.3.0"
+reqwest = { version = "0.12", features = ["json"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+thiserror = "1"
+tokio = { version = "1", features = ["full"] }
+tracing = { path = "lib/tracing-rs" }
+uuid = { version = "1", features = ["v4"] }

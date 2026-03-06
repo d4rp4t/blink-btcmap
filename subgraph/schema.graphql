@@ -1,0 +1,61 @@
+extend type User @key(fields: "id") {
+	id: ID! @external
+}
+
+directive @include(if: Boolean!) on FIELD | FRAGMENT_SPREAD | INLINE_FRAGMENT
+directive @skip(if: Boolean!) on FIELD | FRAGMENT_SPREAD | INLINE_FRAGMENT
+extend schema @link(
+	url: "https://specs.apollo.dev/federation/v2.3",
+	import: ["@key", "@tag", "@shareable", "@inaccessible", "@override", "@external", "@provides", "@requires", "@composeDirective", "@interfaceObject"]
+)
+
+input BtcMapSubmitPlaceInput {
+	lat: Float!
+	lon: Float!
+	"""
+	Single-word lowercase category (e.g. restaurant, atm, hotel)
+	"""
+	category: String!
+	name: String!
+	website: String
+	openingHours: String
+	phone: String
+	description: String
+}
+
+type BtcMapSubmitPlacePayload {
+	place: BtcMapSubmittedPlace!
+}
+
+type BtcMapSubmittedPlace {
+	id: Int!
+	origin: String!
+	externalId: String!
+}
+
+input BtcMapVerifyElementInput {
+	"""
+	OSM element ID in the form "node:12345678" or "way:12345678"
+	"""
+	elementId: String!
+}
+
+type BtcMapVerifyElementPayload {
+	success: Boolean!
+}
+
+type Mutation {
+	"""
+	Submit a new Bitcoin-accepting place to BTC Map.
+	"""
+	btcmapSubmitPlace(input: BtcMapSubmitPlaceInput!): BtcMapSubmitPlacePayload!
+	"""
+	Verify that a place still accepts Bitcoin by recording today's survey date.
+	Requires the btcmap admin API key to have element_admin role.
+	"""
+	btcmapVerifyElement(input: BtcMapVerifyElementInput!): BtcMapVerifyElementPayload!
+}
+
+
+
+
