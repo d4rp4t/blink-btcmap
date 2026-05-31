@@ -184,3 +184,369 @@ pub fn schema(app: Option<Arc<BtcMapClient>>) -> Schema<Query, Mutation, EmptySu
         builder.finish()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use async_graphql::Request;
+    use serde_json::json;
+    use wiremock::{matchers::method, Mock, MockServer, ResponseTemplate};
+
+    fn make_schema(server_url: &str) -> Schema<Query, Mutation, EmptySubscription> {
+        let btcmap = Arc::new(BtcMapClient::new(
+            server_url.to_string(),
+            "api-key".to_string(),
+            "blink".to_string(),
+        ));
+        schema(Some(btcmap))
+    }
+
+    fn authed_req(query: &str) -> Request {
+        Request::new(query).data(AuthSubject { id: "user-1".to_string() })
+    }
+
+    fn ok_place_response() -> ResponseTemplate {
+        ResponseTemplate::new(200).set_body_json(json!({
+            "jsonrpc": "2.0",
+            "result": { "id": 1, "origin": "blink", "external_id": "blink:test-uuid" },
+            "id": 1
+        }))
+    }
+
+    fn ok_null_response() -> ResponseTemplate {
+        ResponseTemplate::new(200).set_body_json(json!({"jsonrpc":"2.0","result":null,"id":1}))
+    }
+
+    fn err_btcmap_response() -> ResponseTemplate {
+        ResponseTemplate::new(200).set_body_json(json!({
+            "jsonrpc": "2.0",
+            "error": { "code": -32600, "message": "Permission denied" },
+            "id": 1
+        }))
+    }
+
+    // ── validate_submit_place ───────────────────────────────────────────────
+
+    fn valid_input() -> BtcMapSubmitPlaceInput {
+        BtcMapSubmitPlaceInput {
+            lat: 52.0,
+            lon: 21.0,
+            category: "atm".to_string(),
+            name: "Test".to_string(),
+            website: None,
+            opening_hours: None,
+            phone: None,
+            description: None,
+        }
+    }
+
+    #[test]
+    fn validate_valid_input() {
+        assert!(validate_submit_place(&valid_input()).is_ok());
+    }
+
+    #[test]
+    fn validate_lat_too_low() {
+        let mut i = valid_input(); i.lat = -91.0;
+        assert!(validate_submit_place(&i).is_err());
+    }
+
+    #[test]
+    fn validate_lat_too_high() {
+        let mut i = valid_input(); i.lat = 91.0;
+        assert!(validate_submit_place(&i).is_err());
+    }
+
+    #[test]
+    fn validate_lat_boundary_ok() {
+        let mut i = valid_input(); i.lat = -90.0;
+        assert!(validate_submit_place(&i).is_ok());
+        i.lat = 90.0;
+        assert!(validate_submit_place(&i).is_ok());
+    }
+
+    #[test]
+    fn validate_lon_too_low() {
+        let mut i = valid_input(); i.lon = -181.0;
+        assert!(validate_submit_place(&i).is_err());
+    }
+
+    #[test]
+    fn validate_lon_too_high() {
+        let mut i = valid_input(); i.lon = 181.0;
+        assert!(validate_submit_place(&i).is_err());
+    }
+
+    #[test]
+    fn validate_lon_boundary_ok() {
+        let mut i = valid_input(); i.lon = -180.0;
+        assert!(validate_submit_place(&i).is_ok());
+        i.lon = 180.0;
+        assert!(validate_submit_place(&i).is_ok());
+    }
+
+    #[test]
+    fn validate_empty_name() {
+        let mut i = valid_input(); i.name = "  ".to_string();
+        assert!(validate_submit_place(&i).is_err());
+    }
+
+    #[test]
+    fn validate_empty_category() {
+        let mut i = valid_input(); i.category = String::new();
+        assert!(validate_submit_place(&i).is_err());
+    }
+
+    #[test]
+    fn validate_category_with_space() {
+        let mut i = valid_input(); i.category = "fast food".to_string();
+        assert!(validate_submit_place(&i).is_err());
+    }
+
+    // ── build_extra_fields ──────────────────────────────────────────────────
+
+    #[test]
+    fn extra_fields_all_none_returns_none() {
+        assert!(build_extra_fields(None, None, None, None).is_none());
+    }
+
+    #[test]
+    fn extra_fields_all_some() {
+        let v = build_extra_fields(
+            Some("https://ex.com"),
+            Some("Mo-Fr 09:00-18:00"),
+            Some("+48123"),
+            Some("desc"),
+        )
+        .unwrap();
+        let obj = v.as_object().unwrap();
+        assert_eq!(obj["website"], "https://ex.com");
+        assert_eq!(obj["opening_hours"], "Mo-Fr 09:00-18:00");
+        assert_eq!(obj["phone"], "+48123");
+        assert_eq!(obj["description"], "desc");
+    }
+
+    #[test]
+    fn extra_fields_website_only() {
+        let v = build_extra_fields(Some("https://ex.com"), None, None, None).unwrap();
+        let obj = v.as_object().unwrap();
+        assert!(obj.contains_key("website"));
+        assert!(!obj.contains_key("phone"));
+    }
+
+    #[test]
+    fn extra_fields_phone_only() {
+        let v = build_extra_fields(None, None, Some("+1"), None).unwrap();
+        assert!(v.as_object().unwrap().contains_key("phone"));
+    }
+
+    #[test]
+    fn extra_fields_description_only() {
+        let v = build_extra_fields(None, None, None, Some("cool")).unwrap();
+        assert!(v.as_object().unwrap().contains_key("description"));
+    }
+
+    #[test]
+    fn extra_fields_opening_hours_only() {
+        let v = build_extra_fields(None, Some("24/7"), None, None).unwrap();
+        assert!(v.as_object().unwrap().contains_key("opening_hours"));
+    }
+
+    // ── schema() ───────────────────────────────────────────────────────────
+
+    #[test]
+    fn schema_none_builds_ok() {
+        let s = schema(None);
+        assert!(!s.sdl().is_empty());
+    }
+
+    #[test]
+    fn schema_some_builds_ok() {
+        let btcmap = Arc::new(BtcMapClient::new(
+            "http://localhost".into(),
+            "key".into(),
+            "blink".into(),
+        ));
+        let s = schema(Some(btcmap));
+        assert!(!s.sdl().is_empty());
+    }
+
+    // ── mutations ──────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn submit_place_success() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ok_place_response())
+            .mount(&server)
+            .await;
+
+        let s = make_schema(&server.uri());
+        let resp = s
+            .execute(authed_req(
+                r#"mutation {
+                  btcmapSubmitPlace(input: {
+                    lat: 52.2, lon: 21.0, category: "atm", name: "My ATM"
+                  }) { place { id origin externalId } }
+                }"#,
+            ))
+            .await;
+        assert!(resp.errors.is_empty(), "{:?}", resp.errors);
+        let data = resp.data.into_json().unwrap();
+        assert_eq!(data["btcmapSubmitPlace"]["place"]["id"], 1);
+    }
+
+    #[tokio::test]
+    async fn submit_place_with_optional_fields() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ok_place_response())
+            .mount(&server)
+            .await;
+
+        let s = make_schema(&server.uri());
+        let resp = s
+            .execute(authed_req(
+                r#"mutation {
+                  btcmapSubmitPlace(input: {
+                    lat: 52.2, lon: 21.0, category: "restaurant", name: "R",
+                    website: "https://r.com", openingHours: "Mo-Fr", phone: "+1", description: "d"
+                  }) { place { id } }
+                }"#,
+            ))
+            .await;
+        assert!(resp.errors.is_empty(), "{:?}", resp.errors);
+    }
+
+    #[tokio::test]
+    async fn submit_place_no_auth() {
+        let s = schema(None);
+        let resp = s
+            .execute(Request::new(
+                r#"mutation { btcmapSubmitPlace(input:{lat:0,lon:0,category:"atm",name:"X"}) { place { id } } }"#,
+            ))
+            .await;
+        assert!(!resp.errors.is_empty());
+    }
+
+    #[tokio::test]
+    async fn submit_place_validation_error_lat() {
+        let s = schema(None);
+        let resp = s
+            .execute(authed_req(
+                r#"mutation { btcmapSubmitPlace(input:{lat:999,lon:0,category:"atm",name:"X"}) { place { id } } }"#,
+            ))
+            .await;
+        assert!(!resp.errors.is_empty());
+        assert!(resp.errors[0].message.contains("Latitude"));
+    }
+
+    #[tokio::test]
+    async fn submit_place_validation_error_lon() {
+        let s = schema(None);
+        let resp = s
+            .execute(authed_req(
+                r#"mutation { btcmapSubmitPlace(input:{lat:0,lon:999,category:"atm",name:"X"}) { place { id } } }"#,
+            ))
+            .await;
+        assert!(!resp.errors.is_empty());
+        assert!(resp.errors[0].message.contains("Longitude"));
+    }
+
+    #[tokio::test]
+    async fn submit_place_validation_error_name() {
+        let s = schema(None);
+        let resp = s
+            .execute(authed_req(
+                r#"mutation { btcmapSubmitPlace(input:{lat:0,lon:0,category:"atm",name:"  "}) { place { id } } }"#,
+            ))
+            .await;
+        assert!(!resp.errors.is_empty());
+    }
+
+    #[tokio::test]
+    async fn submit_place_validation_error_category() {
+        let s = schema(None);
+        let resp = s
+            .execute(authed_req(
+                r#"mutation { btcmapSubmitPlace(input:{lat:0,lon:0,category:"fast food",name:"X"}) { place { id } } }"#,
+            ))
+            .await;
+        assert!(!resp.errors.is_empty());
+    }
+
+    #[tokio::test]
+    async fn submit_place_btcmap_error() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(err_btcmap_response())
+            .mount(&server)
+            .await;
+
+        let s = make_schema(&server.uri());
+        let resp = s
+            .execute(authed_req(
+                r#"mutation { btcmapSubmitPlace(input:{lat:0,lon:0,category:"atm",name:"X"}) { place { id } } }"#,
+            ))
+            .await;
+        assert!(!resp.errors.is_empty());
+        assert!(resp.errors[0].message.contains("Failed to submit place"));
+    }
+
+    #[tokio::test]
+    async fn verify_element_success() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ok_null_response())
+            .mount(&server)
+            .await;
+
+        let s = make_schema(&server.uri());
+        let resp = s
+            .execute(authed_req(
+                r#"mutation { btcmapVerifyElement(input:{elementId:"node:1"}) { success } }"#,
+            ))
+            .await;
+        assert!(resp.errors.is_empty(), "{:?}", resp.errors);
+        let data = resp.data.into_json().unwrap();
+        assert_eq!(data["btcmapVerifyElement"]["success"], true);
+    }
+
+    #[tokio::test]
+    async fn verify_element_no_auth() {
+        let s = schema(None);
+        let resp = s
+            .execute(Request::new(
+                r#"mutation { btcmapVerifyElement(input:{elementId:"node:1"}) { success } }"#,
+            ))
+            .await;
+        assert!(!resp.errors.is_empty());
+    }
+
+    #[tokio::test]
+    async fn verify_element_btcmap_error() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(err_btcmap_response())
+            .mount(&server)
+            .await;
+
+        let s = make_schema(&server.uri());
+        let resp = s
+            .execute(authed_req(
+                r#"mutation { btcmapVerifyElement(input:{elementId:"node:1"}) { success } }"#,
+            ))
+            .await;
+        assert!(!resp.errors.is_empty());
+        assert!(resp.errors[0].message.contains("Failed to verify element"));
+    }
+
+    #[tokio::test]
+    async fn query_me_entity() {
+        let s = schema(None);
+        let resp = s
+            .execute(Request::new(r#"{ _entities(representations:[{__typename:"User",id:"u1"}]) { ... on User { id } } }"#))
+            .await;
+        assert!(resp.errors.is_empty(), "{:?}", resp.errors);
+    }
+}
